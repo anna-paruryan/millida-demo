@@ -1,0 +1,58 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', sans-serif;
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root, .dark {
+    --background: #0a0a0f;
+    --foreground: #e1e1e6;
+    --card: #15151f;
+    --card-foreground: #e1e1e6;
+    --popover: #15151f;
+    --popover-foreground: #e1e1e6;
+    --primary: #ff2d55;
+    --primary-foreground: #ffffff;
+    --muted: #1d1d2b;
+    --muted-foreground: #8a8a9a;
+    --accent: #ff2d55;
+    --border: #2a2a3a;
+    --input: #2a2a3a;
+    --ring: #ff2d55;
+    --radius: 0.75rem;
+}
+
+html, body, #root { height: 100%; }
+body {
+    margin: 0;
+    background: #0a0a0f;
+    color: #e1e1e6;
+    font-family: Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+input:-webkit-autofill {
+    -webkit-box-shadow: 0 0 0 1000px #0a0a0f inset;
+    -webkit-text-fill-color: #e1e1e6;
+}

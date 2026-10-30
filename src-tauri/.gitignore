@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Secrets - never commit
+.env
+.env.*
+!.env.example
+src-tauri/.env
+src-tauri/.env.*
+!src-tauri/.env.example
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Installers
+*.exe
+*.msi
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Vercel
+.vercel/
