@@ -251,9 +251,12 @@ fn validate_skin_upload(file_name: String, bytes: Vec<u8>) -> Result<String, Str
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Сначала пробуем .env рядом (для разработки), затем значение, вшитое при сборке
     dotenvy::dotenv().ok();
-    let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL not set in .env file");
+    let database_url = std::env::var("DATABASE_URL")
+        .ok()
+        .or_else(|| option_env!("DATABASE_URL").map(String::from))
+        .expect("DATABASE_URL not set");
 
     let pool = tauri::async_runtime::block_on(async {
         PgPool::connect(&database_url)
