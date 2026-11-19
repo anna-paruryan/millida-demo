@@ -35,7 +35,9 @@ pnpm install
 pnpm dev            # web version in the browser (mocks)
 pnpm tauri dev      # desktop app, needs src-tauri/.env with DATABASE_URL
 pnpm tauri build    # build the installer
-```
+pnpm run tauri dev
+cd .server/cargo check
+cargo run
 
 ## Notes
 

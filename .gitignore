@@ -1,11 +1,27 @@
+
+# Dependencies
 node_modules/
+
+# Build outputs
 dist/
+target/
+**/target/
+src-tauri/target/
+
+# Environment variables and secrets
 .env
 .env.*
 !.env.example
+
+# IDE
 .vscode/
-src-tauri/target/
-src-tauri/gen/schemas/
-*.log
-pnpm
 .idea/
+
+# Tauri generated schemas
+src-tauri/gen/schemas/
+
+# Logs
+*.log
+
+# Package manager
+pnpm-debug.log*

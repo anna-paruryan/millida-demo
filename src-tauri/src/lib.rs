@@ -1,39 +1,66 @@
+// Desktop client. It has NO database access and NO secrets:
+// all auth goes through the Millida auth server over HTTPS.
 
-use argon2::{
-    password_hash::{
-        rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
-    },
-    Argon2,
-};
-use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
-use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Row};
-use std::time::{SystemTime, UNIX_EPOCH};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::time::Duration;
 use tauri::State;
 
-// TEMPORARY: move this secret to a trusted backend before production.
-const JWT_SECRET: &[u8] = b"millida-demo-secret-change-me";
+// Public server address, baked in at build time:
+//   MILLIDA_API_URL=https://auth.example.com cargo tauri build
+// The URL is not a secret, so embedding it is fine.
+const API_URL: &str = match option_env!("MILLIDA_API_URL") {
+    Some(url) => url,
+    None => "http://127.0.0.1:8080",
+};
 
-#[derive(Serialize, Deserialize)]
-struct Claims {
-    sub: String,
-    uid: i32,
-    exp: usize,
+struct Api {
+    http: reqwest::Client,
 }
 
-#[derive(Serialize)]
+impl Api {
+    fn url(path: &str) -> String {
+        format!("{}{}", API_URL.trim_end_matches('/'), path)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 struct AuthResult {
     username: String,
     token: String,
 }
 
-fn now() -> usize {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as usize
+#[derive(Deserialize)]
+struct MeResponse {
+    username: String,
 }
 
+#[derive(Deserialize)]
+struct ErrorBody {
+    error: String,
+}
+
+fn network_error(_: reqwest::Error) -> String {
+    "Cannot reach the server. Check your internet connection.".into()
+}
+
+/// Turns a server response into Ok(T) or a human-readable error.
+async fn read_json<T: DeserializeOwned>(resp: reqwest::Response) -> Result<T, String> {
+    let status = resp.status();
+
+    if status.is_success() {
+        return resp
+            .json::<T>()
+            .await
+            .map_err(|_| "Unexpected server response".to_string());
+    }
+
+    Err(match resp.json::<ErrorBody>().await {
+        Ok(body) => body.error,
+        Err(_) => format!("Server error ({})", status.as_u16()),
+    })
+}
+
+// Same rules as on the server; checked here only for instant feedback.
 fn validate_creds(u: &str, p: &str) -> Result<(), String> {
     if !(3..=16).contains(&u.len())
         || !u
@@ -43,61 +70,9 @@ fn validate_creds(u: &str, p: &str) -> Result<(), String> {
         return Err("Username: 3–16 chars, letters/digits/_ only".into());
     }
 
-    if p.len() < 6 {
-        return Err("Password must be at least 6 characters".into());
+    if p.len() < 6 || p.len() > 128 {
+        return Err("Password must be 6–128 characters".into());
     }
-
-    Ok(())
-}
-
-fn hash_password(password: &str) -> Result<String, String> {
-    let salt = SaltString::generate(&mut OsRng);
-
-    Argon2::default()
-        .hash_password(password.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-        .map_err(|e| e.to_string())
-}
-
-fn verify_password(password: &str, hash: &str) -> bool {
-    let Ok(parsed) = PasswordHash::new(hash) else {
-        return false;
-    };
-
-    Argon2::default()
-        .verify_password(password.as_bytes(), &parsed)
-        .is_ok()
-}
-
-fn issue_token(username: &str, uid: i32) -> Result<String, String> {
-    let claims = Claims {
-        sub: username.to_string(),
-        uid,
-        exp: now() + 3600 * 24,
-    };
-
-    encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(JWT_SECRET),
-    )
-    .map_err(|e| e.to_string())
-}
-
-async fn insert_session(
-    pool: &PgPool,
-    user_id: i32,
-    token: &str,
-) -> Result<(), String> {
-    sqlx::query(
-        "INSERT INTO sessions (user_id, jwt_token, expires_at)
-         VALUES ($1, $2, NOW() + INTERVAL '1 day')",
-    )
-    .bind(user_id)
-    .bind(token)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to create session: {e}"))?;
 
     Ok(())
 }
@@ -106,7 +81,7 @@ async fn insert_session(
 
 #[tauri::command]
 async fn secure_register(
-    pool: State<'_, PgPool>,
+    api: State<'_, Api>,
     username: String,
     password: String,
     email: String,
@@ -117,92 +92,73 @@ async fn secure_register(
         return Err("Invalid email".into());
     }
 
-    let password_for_hash = password.clone();
+    let resp = api
+        .http
+        .post(Api::url("/api/register"))
+        .json(&serde_json::json!({
+            "username": username,
+            "password": password,
+            "email": email,
+        }))
+        .send()
+        .await
+        .map_err(network_error)?;
 
-    let password_hash = tokio::task::spawn_blocking(move || {
-        hash_password(&password_for_hash)
-    })
-    .await
-    .map_err(|e| format!("Password hashing task failed: {e}"))??;
-
-    let row = sqlx::query(
-        "INSERT INTO users (username, password_hash, email)
-         VALUES ($1, $2, $3)
-         RETURNING id",
-    )
-    .bind(&username)
-    .bind(&password_hash)
-    .bind(&email)
-    .fetch_one(pool.inner())
-    .await
-    .map_err(|e| {
-        format!("Registration failed. Username or email may already exist: {e}")
-    })?;
-
-    let id: i32 = row.get("id");
-
-    let token = issue_token(&username, id)?;
-
-    insert_session(pool.inner(), id, &token).await?;
-
-    Ok(AuthResult { username, token })
+    read_json(resp).await
 }
 
 // ───────────────── LOGIN ─────────────────
 
 #[tauri::command]
 async fn secure_login(
-    pool: State<'_, PgPool>,
+    api: State<'_, Api>,
     username: String,
     password: String,
 ) -> Result<AuthResult, String> {
     validate_creds(&username, &password)?;
 
-    let row = sqlx::query(
-        "SELECT id, password_hash FROM users WHERE username = $1",
-    )
-    .bind(&username)
-    .fetch_optional(pool.inner())
-    .await
-    .map_err(|e| format!("Database error: {e}"))?
-    .ok_or_else(|| "Invalid username or password".to_string())?;
+    let resp = api
+        .http
+        .post(Api::url("/api/login"))
+        .json(&serde_json::json!({
+            "username": username,
+            "password": password,
+        }))
+        .send()
+        .await
+        .map_err(network_error)?;
 
-    let id: i32 = row.get("id");
-    let password_hash: String = row.get("password_hash");
+    read_json(resp).await
+}
 
-    let password_for_verify = password.clone();
+// ───────────────── LOGOUT ─────────────────
 
-    let is_valid = tokio::task::spawn_blocking(move || {
-        verify_password(&password_for_verify, &password_hash)
-    })
-    .await
-    .map_err(|e| format!("Password verification task failed: {e}"))?;
+#[tauri::command]
+async fn secure_logout(api: State<'_, Api>, token: String) -> Result<(), String> {
+    let resp = api
+        .http
+        .post(Api::url("/api/logout"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(network_error)?;
 
-    if !is_valid {
-        return Err("Invalid username or password".into());
+    // 401 means the session is already gone — that's fine for logout.
+    if resp.status().is_success() || resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        Ok(())
+    } else {
+        Err(format!("Logout failed ({})", resp.status().as_u16()))
     }
-
-    let token = issue_token(&username, id)?;
-
-    insert_session(pool.inner(), id, &token).await?;
-
-    Ok(AuthResult { username, token })
 }
 
 // ───────────────── LAUNCH ─────────────────
 
 #[tauri::command]
 async fn secure_launch(
+    api: State<'_, Api>,
     server_ip: String,
     token: String,
 ) -> Result<String, String> {
-    let data = decode::<Claims>(
-        &token,
-        &DecodingKey::from_secret(JWT_SECRET),
-        &Validation::default(),
-    )
-    .map_err(|_| "Session expired, please log in again".to_string())?;
-
     let ok = !server_ip.is_empty()
         && server_ip.len() <= 64
         && server_ip
@@ -218,12 +174,23 @@ async fn secure_launch(
         return Err("Invalid server address".into());
     }
 
-    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    // The server checks the session; the client cannot fake this.
+    let resp = api
+        .http
+        .get(Api::url("/api/me"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .map_err(network_error)?;
+
+    let me: MeResponse = read_json(resp).await?;
+
+    tokio::time::sleep(Duration::from_millis(1200)).await;
 
     Ok(format!(
         "Launched {} as {}",
         server_ip,
-        data.claims.sub
+        me.username
     ))
 }
 
@@ -278,26 +245,21 @@ fn validate_skin_upload(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    dotenvy::dotenv().ok();
-
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL not set");
-
-    let pool = tauri::async_runtime::block_on(async {
-        PgPool::connect(&database_url)
-            .await
-            .expect("Failed to connect to Neon")
-    });
-
-    println!("Connected to Neon");
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        // Release builds refuse plain http, so tokens never travel unencrypted.
+        .https_only(!cfg!(debug_assertions))
+        .build()
+        .expect("Failed to create HTTP client");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .manage(pool)
+        .manage(Api { http })
         .invoke_handler(tauri::generate_handler![
             secure_register,
             secure_login,
+            secure_logout,
             secure_launch,
             validate_skin_upload
         ])

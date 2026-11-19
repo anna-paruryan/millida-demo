@@ -36,6 +36,6 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 
     const mock = mocks[cmd];
     if (!mock) throw `Command "${cmd}" is available only in the Tauri app`;
-    await new Promise((r) => setTimeout(r, 300)); // имитация задержки
+    await new Promise((r) => setTimeout(r, 300));
     return mock(args ?? {}) as T;
 }
