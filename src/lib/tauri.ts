@@ -1,7 +1,6 @@
-//C:\Users\annap\Desktop\millida-demo\src-tauri\src\tauri.ts
+//src/lib/tauri.ts
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
-/** true только внутри окна Tauri; в обычном браузере (localhost:1420) будет false */
 export const isTauri = () =>
     typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
